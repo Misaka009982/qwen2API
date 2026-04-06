@@ -42,6 +42,7 @@ def start_backend() -> subprocess.Popen:
 
 def start_frontend() -> subprocess.Popen:
     print("⚡ 正在唤醒前端王座 (Admin Dashboard)...")
+    # 让前端的日志既写文件，也同时在终端输出（如果它很快报错的话），这里直接用 None 让它在终端打印，方便你排查
     log_file = open(LOGS_DIR / "frontend.log", "w", encoding="utf-8")
     
     # 跨平台调用 npm
@@ -52,10 +53,11 @@ def start_frontend() -> subprocess.Popen:
         npm_cmd,
         cwd=FRONTEND_DIR,
         shell=is_windows, # 在 Windows 上通过 shell 启动 npm
-        stdout=log_file,
-        stderr=subprocess.STDOUT
+        # 将输出直接抛到你的终端，不吞噬，让你看清楚真正的死因
+        stdout=None,
+        stderr=None
     )
-    print(f"✓ Frontend 已点火 (PID: {proc.pid}) -> 日志: logs/frontend.log")
+    print(f"✓ Frontend 已点火 (PID: {proc.pid}) -> 终端直出报错")
     return proc
 
 def main():
