@@ -25,7 +25,7 @@ def _new_browser():
         block_images=True,
         i_know_what_im_doing=True,
         os=["windows"],
-        windowsize=(1920, 1080)
+        window_size=(1920, 1080)
     )
 
 async def get_fresh_token(email: str, password: str) -> str:
@@ -384,5 +384,5 @@ class AuthResolver:
                     log.error(f"[Auth] {acc.email} 登录失败或遭遇滑块验证拦截。")
                     return False
         except Exception as e:
-            log.error(f"[Auth] 自愈流程异常: {e}")
-            return False
+            log.error(f"[Register] 浏览器引擎崩溃或被拦截: {str(e)}")
+            return None
