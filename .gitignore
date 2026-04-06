@@ -18,7 +18,6 @@ logs/*.log
 test_*.py
 add_account.py
 fix_*.py
-start.py
 
 # Env
 .env

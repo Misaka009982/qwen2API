@@ -4,30 +4,33 @@ from pathlib import Path
 from pydantic_settings import BaseSettings
 from typing import Dict, Set
 
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+DATA_DIR = BASE_DIR / "data"
+
 class Settings(BaseSettings):
     # 服务配置
     PORT: int = int(os.getenv("PORT", 8080))
     WORKERS: int = int(os.getenv("WORKERS", 3))
     ADMIN_KEY: str = os.getenv("ADMIN_KEY", "admin")
-    
+
     # 浏览器引擎配置
     BROWSER_POOL_SIZE: int = int(os.getenv("BROWSER_POOL_SIZE", 2))
     MAX_INFLIGHT_PER_ACCOUNT: int = int(os.getenv("MAX_INFLIGHT", 1))
-    
+
     # 容灾与限流
     MAX_RETRIES: int = 3
     RATE_LIMIT_COOLDOWN: int = 600
-    
+
     # 数据文件路径
-    ACCOUNTS_FILE: str = os.getenv("ACCOUNTS_FILE", "data/accounts.json")
-    USERS_FILE: str = os.getenv("USERS_FILE", "data/users.json")
-    CAPTURES_FILE: str = os.getenv("CAPTURES_FILE", "data/captures.json")
-    CONFIG_FILE: str = os.getenv("CONFIG_FILE", "data/config.json")
-    
+    ACCOUNTS_FILE: str = os.getenv("ACCOUNTS_FILE", str(DATA_DIR / "accounts.json"))
+    USERS_FILE: str = os.getenv("USERS_FILE", str(DATA_DIR / "users.json"))
+    CAPTURES_FILE: str = os.getenv("CAPTURES_FILE", str(DATA_DIR / "captures.json"))
+    CONFIG_FILE: str = os.getenv("CONFIG_FILE", str(DATA_DIR / "config.json"))
+
     class Config:
         env_file = ".env"
 
-API_KEYS_FILE = Path("data/api_keys.json")
+API_KEYS_FILE = DATA_DIR / "api_keys.json"
 
 def load_api_keys() -> set:
     if API_KEYS_FILE.exists():
