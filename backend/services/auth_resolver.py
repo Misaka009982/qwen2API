@@ -353,8 +353,20 @@ async def activate_account(acc: Account) -> bool:
             except Exception:
                 pass
             
-            # 缩短强制等待时间
+            # 缩短强制等待时间，并强制点击页面上可能存在的刷新按钮以加速邮件获取
             await asyncio.sleep(2)
+            try:
+                log.info("[Activate] 强制触发页面刷新动作以加速邮件显示...")
+                await page.evaluate('''() => {
+                    const refreshBtns = Array.from(document.querySelectorAll('button, a')).filter(el => 
+                        el.innerText.toLowerCase().includes('refresh') || 
+                        el.innerText.toLowerCase().includes('刷新')
+                    );
+                    if(refreshBtns.length > 0) { refreshBtns[0].click(); }
+                }''')
+                await asyncio.sleep(1)
+            except Exception:
+                pass
 
             # Step 2: Wait for email list to appear, then click the first email
             log.info(f"[Activate] 等待收件箱加载...")
