@@ -73,7 +73,15 @@ async def create_user(user: UserCreate, request: Request):
 @router.get("/accounts", dependencies=[Depends(verify_admin)])
 async def list_accounts(request: Request):
     pool: AccountPool = request.app.state.account_pool
-    return {"accounts": [a.to_dict() for a in pool.accounts]}
+    # 模拟原始 FastAPI 序列化，包含运行时状态
+    accs = []
+    for a in pool.accounts:
+        d = a.to_dict()
+        d["valid"] = a.valid
+        d["inflight"] = a.inflight
+        d["rate_limited_until"] = a.rate_limited_until
+        accs.append(d)
+    return {"accounts": accs}
 
 @router.post("/accounts/register", dependencies=[Depends(verify_admin)])
 async def register_new_account(request: Request):
