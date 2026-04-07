@@ -5,6 +5,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import os
+import sys
+
+# 将项目根目录加入到 sys.path，解决直接运行 main.py 时找不到 backend 模块的问题
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from backend.core.config import settings
 from backend.core.database import AsyncJsonDB
 from backend.core.browser_engine import BrowserEngine
