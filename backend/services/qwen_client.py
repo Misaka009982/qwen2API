@@ -129,10 +129,10 @@ class QwenClient:
         feature_config = {
             "thinking_enabled": True, "output_schema": "phase", "research_mode": "normal",
             "auto_thinking": True, "thinking_mode": "Auto", "thinking_format": "summary",
-            "auto_search": not has_custom_tools,
-            "code_interpreter": not has_custom_tools,
-            "function_calling": not has_custom_tools,
-            "plugins_enabled": not has_custom_tools,
+            "auto_search": False,
+            "code_interpreter": False,
+            "function_calling": False,
+            "plugins_enabled": False,
         }
         return {
             "stream": True, "version": "2.1", "incremental_output": True,

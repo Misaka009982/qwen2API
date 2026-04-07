@@ -183,13 +183,12 @@ def parse_tool_calls(answer: str, tools: list):
 
 def inject_format_reminder(prompt: str, tool_name: str) -> str:
     reminder = (
-        f"[CORRECTION]: You attempted to execute '{tool_name}' using the WRONG format — "
-        f"the server BLOCKED it with an error. "
-        f"You MUST use ✿ACTION✿ format and NOTHING ELSE:\n"
+        f"[CORRECTION]: You just tried to call '{tool_name}' using an INVALID FORMAT.\n"
+        f"You MUST use the `✿ACTION✿` syntax. Do NOT use JSON directly, do NOT use markdown code blocks like ```json.\n\n"
+        f"Example of CORRECT format:\n"
         f"✿ACTION✿\n"
-        f'{{"action": "{tool_name}", "args": {{...your args here...}}}}\n'
+        f'{{"action": "{tool_name}", "args": {{"key": "value"}}}}\n'
         f"✿END_ACTION✿\n"
-        f"DO NOT use JSON without delimiters. DO NOT use `<|tool_call|>`. ONLY ✿ACTION✿.\n"
     )
     prompt = prompt.rstrip()
     if prompt.endswith("Assistant:"):
