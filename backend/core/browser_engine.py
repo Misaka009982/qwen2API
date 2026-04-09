@@ -8,15 +8,16 @@ log = logging.getLogger("qwen2api.browser")
 
 JS_FETCH = """
 async (args) => {
+    const params = JSON.parse(args);
     const opts = {
-        method: args.method,
+        method: params.method,
         headers: {
             'Content-Type': 'application/json',
-            'Authorization': 'Bearer ' + args.token
+            'Authorization': 'Bearer ' + params.token
         }
     };
-    if (args.body_json) opts.body = args.body_json;
-    const res = await fetch(args.url, opts);
+    if (params.body_json) opts.body = params.body_json;
+    const res = await fetch(params.url, opts);
     const text = await res.text();
     return { status: res.status, body: text };
 }
@@ -24,16 +25,17 @@ async (args) => {
 
 JS_STREAM_CHUNKED = """
 async (args) => {
+    const params = JSON.parse(args);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 1800000);
     try {
-        const res = await fetch(args.url, {
+        const res = await fetch(params.url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + args.token
+                'Authorization': 'Bearer ' + params.token
             },
-            body: args.payload_json,
+            body: params.payload_json,
             signal: controller.signal
         });
         if (!res.ok) {
@@ -48,13 +50,13 @@ async (args) => {
         while (true) {
             const { done, value } = await reader.read();
             if (done) {
-                if (buf) await send_chunk(args.chat_id, buf);
+                if (buf) await send_chunk(params.chat_id, buf);
                 break;
             }
             buf += decoder.decode(value, { stream: true });
             // 遇到完整 SSE 消息边界（\n\n）或缓冲够了就立刻发送
             if (buf.includes('\n\n') && buf.length >= FLUSH_CHARS) {
-                await send_chunk(args.chat_id, buf);
+                await send_chunk(params.chat_id, buf);
                 buf = '';
             }
         }
@@ -69,16 +71,17 @@ async (args) => {
 
 JS_STREAM_FULL = """
 async (args) => {
+    const params = JSON.parse(args);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 1800000);  // 1800s timeout
     try {
-        const res = await fetch(args.url, {
+        const res = await fetch(params.url, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
-                'Authorization': 'Bearer ' + args.token
+                'Authorization': 'Bearer ' + params.token
             },
-            body: args.payload_json,
+            body: params.payload_json,
             signal: controller.signal
         });
         if (!res.ok) {
@@ -231,10 +234,11 @@ class BrowserEngine:
             
         needs_refresh = False
         try:
-            result = await page.evaluate(JS_FETCH, {
+            args_json = json.dumps({
                 "method": method, "url": path, "token": token,
                 "body_json": json.dumps(body, ensure_ascii=True) if body else None,
-            })
+            }, ensure_ascii=True)
+            result = await page.evaluate(JS_FETCH, args_json)
             if result.get("status") == 0 and result.get("body", "").startswith("JS error:"):
                 needs_refresh = True
             return result
@@ -267,8 +271,12 @@ class BrowserEngine:
         # ── 缓冲模式（工具调用）：一次 JS evaluate，一次 IPC，最快 ──────────
         if buffered:
             try:
+                args_json = json.dumps({
+                    "url": url, "token": token,
+                    "payload_json": json.dumps(payload, ensure_ascii=True),
+                }, ensure_ascii=True)
                 res = await asyncio.wait_for(
-                    page.evaluate(JS_STREAM_FULL, {"url": url, "token": token, "payload_json": json.dumps(payload, ensure_ascii=True)}),
+                    page.evaluate(JS_STREAM_FULL, args_json),
                     timeout=1800,
                 )
                 if res.get("status") != 200:
@@ -293,12 +301,13 @@ class BrowserEngine:
         self.stream_queues[chat_id] = queue
         try:
             # 启动 JS 流式读取（不 await），同时从队列实时 yield 每个 chunk
+            args_json = json.dumps({
+                "url": url, "token": token,
+                "payload_json": json.dumps(payload, ensure_ascii=True),
+                "chat_id": chat_id,
+            }, ensure_ascii=True)
             js_task = asyncio.create_task(
-                page.evaluate(JS_STREAM_CHUNKED, {
-                    "url": url, "token": token,
-                    "payload_json": json.dumps(payload, ensure_ascii=True),
-                    "chat_id": chat_id
-                })
+                page.evaluate(JS_STREAM_CHUNKED, args_json)
             )
             # 从队列实时转发 chunk，直到 JS 任务结束且队列清空
             while True:
