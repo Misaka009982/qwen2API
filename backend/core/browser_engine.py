@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import logging
 import os
@@ -6,17 +7,15 @@ from contextlib import asynccontextmanager
 
 log = logging.getLogger("qwen2api.browser")
 
-def _escape_for_js_string(s: str) -> str:
-    """转义 Python 字符串使其可以安全地放在 JavaScript 字符串字面量中（单引号）"""
-    return (s.replace('\\', '\\\\')
-             .replace("'", "\\'")
-             .replace('\n', '\\n')
-             .replace('\r', '\\r')
-             .replace('\t', '\\t'))
+def _b64(params: dict) -> str:
+    """把参数字典序列化为 Base64 字符串，安全传入 JavaScript"""
+    return base64.b64encode(
+        json.dumps(params, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+    ).decode('ascii')
 
 JS_FETCH_TEMPLATE = """
 (async () => {
-    const params = JSON.parse('{PARAMS_JSON_STRING}');
+    const params = JSON.parse(atob('{B64}'));
     const opts = {
         method: params.method,
         headers: {
@@ -33,7 +32,7 @@ JS_FETCH_TEMPLATE = """
 
 JS_STREAM_CHUNKED_TEMPLATE = """
 (async () => {
-    const params = JSON.parse('{PARAMS_JSON_STRING}');
+    const params = JSON.parse(atob('{B64}'));
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 1800000);
     try {
@@ -78,7 +77,7 @@ JS_STREAM_CHUNKED_TEMPLATE = """
 
 JS_STREAM_FULL_TEMPLATE = """
 (async () => {
-    const params = JSON.parse('{PARAMS_JSON_STRING}');
+    const params = JSON.parse(atob('{B64}'));
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), 1800000);
     try {
@@ -241,12 +240,10 @@ class BrowserEngine:
             
         needs_refresh = False
         try:
-            args_json = json.dumps({
+            code = JS_FETCH_TEMPLATE.replace("{B64}", _b64({
                 "method": method, "url": path, "token": token,
-                "body_json": json.dumps(body, ensure_ascii=True) if body else None,
-            }, ensure_ascii=True, separators=(',', ':'))
-            args_json_escaped = _escape_for_js_string(args_json)
-            code = JS_FETCH_TEMPLATE.replace("{PARAMS_JSON_STRING}", args_json_escaped)
+                "body_json": json.dumps(body, ensure_ascii=False) if body else None,
+            }))
             result = await page.evaluate(code)
             if result.get("status") == 0 and result.get("body", "").startswith("JS error:"):
                 needs_refresh = True
@@ -280,12 +277,10 @@ class BrowserEngine:
         # ── 缓冲模式（工具调用）：一次 JS evaluate，一次 IPC，最快 ──────────
         if buffered:
             try:
-                args_json = json.dumps({
+                code = JS_STREAM_FULL_TEMPLATE.replace("{B64}", _b64({
                     "url": url, "token": token,
-                    "payload_json": json.dumps(payload, ensure_ascii=True),
-                }, ensure_ascii=True, separators=(',', ':'))
-                args_json_escaped = _escape_for_js_string(args_json)
-                code = JS_STREAM_FULL_TEMPLATE.replace("{PARAMS_JSON_STRING}", args_json_escaped)
+                    "payload_json": json.dumps(payload, ensure_ascii=False),
+                }))
                 res = await asyncio.wait_for(
                     page.evaluate(code),
                     timeout=1800,
@@ -312,13 +307,11 @@ class BrowserEngine:
         self.stream_queues[chat_id] = queue
         try:
             # 启动 JS 流式读取（不 await），同时从队列实时 yield 每个 chunk
-            args_json = json.dumps({
+            code = JS_STREAM_CHUNKED_TEMPLATE.replace("{B64}", _b64({
                 "url": url, "token": token,
-                "payload_json": json.dumps(payload, ensure_ascii=True),
+                "payload_json": json.dumps(payload, ensure_ascii=False),
                 "chat_id": chat_id,
-            }, ensure_ascii=True, separators=(',', ':'))
-            args_json_escaped = _escape_for_js_string(args_json)
-            code = JS_STREAM_CHUNKED_TEMPLATE.replace("{PARAMS_JSON_STRING}", args_json_escaped)
+            }))
             js_task = asyncio.create_task(
                 page.evaluate(code)
             )
