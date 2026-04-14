@@ -14,6 +14,7 @@ from backend.runtime.execution import (
     cleanup_runtime_resources,
     collect_completion_run,
     evaluate_retry_directive,
+    request_max_attempts,
 )
 from backend.services.auth_quota import resolve_auth_context
 from backend.services.prompt_builder import CLAUDE_CODE_OPENAI_PROFILE, messages_to_prompt
@@ -207,7 +208,7 @@ async def anthropic_messages(request: Request):
         if standard_request.stream:
             async def generate():
                 current_prompt = prompt
-                max_attempts = settings.MAX_RETRIES + (1 if standard_request.tools else 0)
+                max_attempts = request_max_attempts(standard_request)
                 for stream_attempt in range(max_attempts):
                     stream_state = _AnthropicStreamState(msg_id=msg_id, model_name=model_name, prompt=current_prompt)
                     try:
@@ -322,7 +323,7 @@ async def anthropic_messages(request: Request):
             )
 
         current_prompt = prompt
-        max_attempts = settings.MAX_RETRIES + (1 if standard_request.tools else 0)
+        max_attempts = request_max_attempts(standard_request)
         for stream_attempt in range(max_attempts):
             try:
                 execution, retry = await _run_anthropic_attempt(

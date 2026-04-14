@@ -48,6 +48,10 @@ def _build_tool_instruction_block(tools: list[dict], client_profile: str) -> str
             '- {"type": "function", "name": "X"}  <-- NEVER USE',
             '- {"type": "tool_use", "name": "X"}  <-- NEVER USE',
             '- <tool_call>{...}</tool_call>  <-- NEVER USE',
+            "- For file/config tasks, prefer Read/Edit/Write over Bash.",
+            "- Use Bash only when you truly need shell behavior such as copy/move/search pipelines.",
+            "- If the path looks like Windows (for example C:\\...), Bash still uses POSIX syntax. Do NOT use cmd builtins like copy, type, del, or dir inside Bash.",
+            '- In Bash on Windows-like paths, prefer cp/cat/ls/mv, or explicitly invoke powershell.exe -Command "..." when PowerShell semantics are required.',
             "- If no tool is needed, answer normally.",
             "Available tools:",
         ]
@@ -139,6 +143,23 @@ def _sanitize_openclaw_user_text(text: str) -> str:
         else:
             return ""
     return cleaned
+
+
+def _extract_user_text_only(content, client_profile: str = OPENCLAW_OPENAI_PROFILE) -> str:
+    if isinstance(content, str):
+        return _sanitize_openclaw_user_text(content) if client_profile == OPENCLAW_OPENAI_PROFILE else content
+    if isinstance(content, list):
+        text_blocks = []
+        for part in content:
+            if not isinstance(part, dict) or part.get("type", "") != "text":
+                continue
+            block_text = part.get("text", "")
+            if client_profile == OPENCLAW_OPENAI_PROFILE:
+                block_text = _sanitize_openclaw_user_text(block_text)
+            if block_text:
+                text_blocks.append(block_text)
+        return "\n".join(text_blocks)
+    return ""
 
 
 def _extract_text(content, user_tool_mode: bool = False, client_profile: str = OPENCLAW_OPENAI_PROFILE) -> str:
@@ -275,6 +296,7 @@ def build_prompt_with_tools(system_prompt: str, messages: list, tools: list, *, 
             msg_count += 1
             continue
 
+        user_text_only = _extract_user_text_only(msg.get("content", ""), client_profile=client_profile) if role == "user" else ""
         text = _extract_text(
             msg.get("content", ""),
             user_tool_mode=(bool(tools) and role == "user" and client_profile == CLAUDE_CODE_OPENAI_PROFILE),
@@ -303,8 +325,9 @@ def build_prompt_with_tools(system_prompt: str, messages: list, tools: list, *, 
         max_len = 600 if is_tool_result else 1400
         if len(text) > max_len:
             text = text[:max_len] + "...[truncated]"
-        prefix = {"user": "Human: ", "assistant": "Assistant: ", "system": "System: "}.get(role, "")
-        line = f"{prefix}{text}"
+        is_tool_result_only_user_msg = role == "user" and not user_text_only.strip() and bool(text.strip())
+        prefix = "" if is_tool_result_only_user_msg else {"user": "Human: ", "assistant": "Assistant: ", "system": "System: "}.get(role, "")
+        line = text if is_tool_result_only_user_msg else f"{prefix}{text}"
         if used + len(line) + 2 > budget and history_parts:
             break
         history_parts.insert(0, line)
@@ -312,14 +335,17 @@ def build_prompt_with_tools(system_prompt: str, messages: list, tools: list, *, 
         msg_count += 1
 
     if tools and messages:
-        first_user = next((m for m in messages if m.get("role") == "user"), None)
+        first_user = next(
+            (
+                m for m in messages
+                if m.get("role") == "user"
+                and _extract_user_text_only(m.get("content", ""), client_profile=client_profile).strip()
+            ),
+            None,
+        )
         if first_user:
-            first_text = _extract_text(
-                first_user.get("content", ""),
-                user_tool_mode=(client_profile == CLAUDE_CODE_OPENAI_PROFILE),
-                client_profile=client_profile,
-            )
-            first_short = first_text[:800] + ("...[原始任务截断]" if len(first_text) > 800 else "")
+            first_text = _extract_user_text_only(first_user.get("content", ""), client_profile=client_profile)
+            first_short = first_text[:800] + ("...[original task truncated]" if len(first_text) > 800 else "")
             first_line = f"Human: {first_short}"
             if not history_parts or not history_parts[0].startswith(f"Human: {first_text[:60]}"):
                 first_line_cost = len(first_line) + 2
@@ -329,20 +355,25 @@ def build_prompt_with_tools(system_prompt: str, messages: list, tools: list, *, 
                         used -= len(removed) + 2
                     history_parts.insert(0, first_line)
                     used += first_line_cost
-                    log.debug(f"[Prompt] 补回原始任务消息，确保上下文完整 ({len(first_short)}字)")
+                    log.debug(f"[Prompt] Restored original task context ({len(first_short)} chars)")
+
 
     latest_user_line = ""
     if tools and messages:
-        latest_user = next((m for m in reversed(messages) if m.get("role") == "user"), None)
+        latest_user = next(
+            (
+                m for m in reversed(messages)
+                if m.get("role") == "user"
+                and _extract_user_text_only(m.get("content", ""), client_profile=client_profile).strip()
+            ),
+            None,
+        )
         if latest_user:
-            latest_text = _extract_text(
-                latest_user.get("content", ""),
-                user_tool_mode=(client_profile == CLAUDE_CODE_OPENAI_PROFILE),
-                client_profile=client_profile,
-            ).strip()
+            latest_text = _extract_user_text_only(latest_user.get("content", ""), client_profile=client_profile).strip()
             if latest_text:
-                latest_short = latest_text[:900] + ("...[最新任务截断]" if len(latest_text) > 900 else "")
+                latest_short = latest_text[:900] + ("...[latest task truncated]" if len(latest_text) > 900 else "")
                 latest_user_line = f"Human (CURRENT TASK - TOP PRIORITY): {latest_short}"
+
 
     if tools and log.isEnabledFor(logging.DEBUG):
         tool_names = [tool.get("name", "") for tool in tools if tool.get("name")]

@@ -16,7 +16,7 @@ from backend.services.prompt_builder import CLAUDE_CODE_OPENAI_PROFILE, OPENCLAW
 from backend.services.response_formatters import build_openai_completion_payload
 from backend.services.qwen_client import QwenClient
 from backend.services.standard_request_builder import build_chat_standard_request
-from backend.runtime.execution import RuntimeAttemptState, build_tool_directive, build_usage_delta_factory
+from backend.runtime.execution import RuntimeAttemptState, build_tool_directive, build_usage_delta_factory, request_max_attempts
 
 log = logging.getLogger("qwen2api.chat")
 router = APIRouter()
@@ -114,7 +114,7 @@ async def chat_completions(request: Request):
                         users_db=users_db,
                         token=token,
                         history_messages=history_messages,
-                        max_attempts=settings.MAX_RETRIES + (1 if standard_request.tools else 0),
+                        max_attempts=request_max_attempts(standard_request),
                         usage_delta_factory=build_usage_delta_factory(prompt),
                         allow_after_visible_output=True,
                         capture_events=False,
@@ -148,7 +148,7 @@ async def chat_completions(request: Request):
                 users_db=users_db,
                 token=token,
                 history_messages=history_messages,
-                max_attempts=settings.MAX_RETRIES + (1 if standard_request.tools else 0),
+                max_attempts=request_max_attempts(standard_request),
                 usage_delta_factory=build_usage_delta_factory(prompt),
                 allow_after_visible_output=True,
             )

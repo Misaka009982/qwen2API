@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import re
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
@@ -13,6 +14,9 @@ from backend.runtime.stream_metrics import StreamMetrics
 from backend.services import tool_parser
 from backend.toolcall.normalize import normalize_tool_name
 from backend.toolcall.stream_state import StreamingToolCallState
+
+
+log = logging.getLogger("qwen2api.runtime")
 
 
 @dataclass(slots=True)
@@ -122,6 +126,7 @@ __all__ = [
     "parse_tool_directive_once",
     "plan_runtime_attempts",
     "recent_same_tool_identity_count",
+    "request_max_attempts",
     "retryable_usage_delta",
     "should_force_finish_after_tool_use",
     "tool_identity",
@@ -500,6 +505,10 @@ def build_usage_delta_factory(prompt: str) -> Callable[[RuntimeExecutionResult, 
     return lambda execution, _=None: len(execution.state.answer_text) + len(prompt)
 
 
+def request_max_attempts(request: StandardRequest) -> int:
+    return 2 if request.tools else settings.MAX_RETRIES
+
+
 def plan_runtime_attempts(request: StandardRequest, *, initial_prompt: str) -> RuntimeAttemptPlan:
     loop = build_retry_loop(request, initial_prompt=initial_prompt)
     return RuntimeAttemptPlan(loop=loop, prompt=loop.prompt)
@@ -508,7 +517,7 @@ def plan_runtime_attempts(request: StandardRequest, *, initial_prompt: str) -> R
 def build_retry_loop(request: StandardRequest, *, initial_prompt: str) -> RuntimeRetryLoop:
     return RuntimeRetryLoop(
         prompt=initial_prompt,
-        max_attempts=settings.MAX_RETRIES + (1 if request.tools else 0),
+        max_attempts=request_max_attempts(request),
     )
 
 
@@ -527,13 +536,26 @@ def evaluate_retry_directive(
 
     can_retry_after_output = allow_after_visible_output or not state.emitted_visible_output
 
+    def _retry(reason: str, next_prompt: str) -> RuntimeRetryDirective:
+        log.info(
+            "[Retry] reason=%s attempt=%s/%s profile=%s blocked=%s finish_reason=%s visible_output=%s",
+            reason,
+            attempt_index + 1,
+            max_attempts,
+            getattr(request, "client_profile", "-"),
+            state.blocked_tool_names[:3],
+            state.finish_reason,
+            state.emitted_visible_output,
+        )
+        return RuntimeRetryDirective(retry=True, next_prompt=next_prompt)
+
     if state.blocked_tool_names and request.tools:
         if not can_retry_after_output:
             return RuntimeRetryDirective(retry=False, next_prompt=current_prompt)
         blocked_name = normalize_tool_name(state.blocked_tool_names[0], request.tool_names)
-        return RuntimeRetryDirective(
-            retry=True,
-            next_prompt=tool_parser.inject_format_reminder(
+        return _retry(
+            f"blocked_tool_name:{blocked_name}",
+            tool_parser.inject_format_reminder(
                 current_prompt,
                 blocked_name,
                 client_profile=getattr(request, "client_profile", CLAUDE_CODE_OPENAI_PROFILE),
@@ -547,9 +569,9 @@ def evaluate_retry_directive(
             if saw_contract_markup and can_retry_after_output:
                 if has_invalid_textual_tool_contract(state.answer_text):
                     fallback_tool_name = request.tool_names[0] if request.tool_names else "tool"
-                    return RuntimeRetryDirective(
-                        retry=True,
-                        next_prompt=tool_parser.inject_format_reminder(
+                    return _retry(
+                        f"invalid_textual_tool_contract:{fallback_tool_name}",
+                        tool_parser.inject_format_reminder(
                             current_prompt,
                             fallback_tool_name,
                             client_profile=getattr(request, "client_profile", CLAUDE_CODE_OPENAI_PROFILE),
@@ -558,9 +580,9 @@ def evaluate_retry_directive(
                 directive = parse_tool_directive_once(request, state)
                 if directive.stop_reason != "tool_use":
                     fallback_tool_name = request.tool_names[0] if request.tool_names else "tool"
-                    return RuntimeRetryDirective(
-                        retry=True,
-                        next_prompt=tool_parser.inject_format_reminder(
+                    return _retry(
+                        f"unparsed_textual_tool_contract:{fallback_tool_name}",
+                        tool_parser.inject_format_reminder(
                             current_prompt,
                             fallback_tool_name,
                             client_profile=getattr(request, "client_profile", CLAUDE_CODE_OPENAI_PROFILE),
@@ -591,7 +613,10 @@ def evaluate_retry_directive(
                         "Use the tool result you already have and either choose the next relevant tool or finish the task. "
                         "If this is a config-file task, read once and then edit/write the file instead of rereading it."
                     )
-                    return RuntimeRetryDirective(retry=True, next_prompt=inject_assistant_message(current_prompt, force_text))
+                    return _retry(
+                        f"repeated_same_tool:{first_tool.get('name', '')}",
+                        inject_assistant_message(current_prompt, force_text),
+                    )
             if (
                 first_tool
                 and first_tool.get("name") == "Read"
@@ -603,7 +628,10 @@ def evaluate_retry_directive(
                     "Do NOT call Read again on the same target. "
                     "Choose another tool now."
                 )
-                return RuntimeRetryDirective(retry=True, next_prompt=inject_assistant_message(current_prompt, force_text))
+                return _retry(
+                    "unchanged_read_result",
+                    inject_assistant_message(current_prompt, force_text),
+                )
 
             if (
                 first_tool
@@ -616,7 +644,10 @@ def evaluate_retry_directive(
                     "Do NOT call WebSearch again with similar wording. "
                     "Use another tool or finish with the best available answer."
                 )
-                return RuntimeRetryDirective(retry=True, next_prompt=inject_assistant_message(current_prompt, force_text))
+                return _retry(
+                    "search_no_results",
+                    inject_assistant_message(current_prompt, force_text),
+                )
 
     return RuntimeRetryDirective(retry=False, next_prompt=current_prompt)
 
