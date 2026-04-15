@@ -84,12 +84,13 @@ class QwenExecutor:
         model: str,
         content: str,
         has_custom_tools: bool = False,
+        files: list[dict] | None = None,
     ):
         stream_fn = getattr(self.engine, "stream_chat_once", None) or getattr(self.engine, "fetch_chat", None)
         if stream_fn is None:
             raise Exception("stream transport unavailable")
 
-        payload = build_chat_payload(chat_id, model, content, has_custom_tools)
+        payload = build_chat_payload(chat_id, model, content, has_custom_tools, files=files)
         buffer = ""
         started_at = time.perf_counter()
         first_event_logged = False
@@ -126,8 +127,24 @@ class QwenExecutor:
 
         log.info(f"[Executor] stream finish chat_id={chat_id} total={(time.perf_counter() - started_at):.3f}s")
 
-    async def chat_stream_events_with_retry(self, model: str, content: str, has_custom_tools: bool = False):
+    async def chat_stream_events_with_retry(self, model: str, content: str, has_custom_tools: bool = False, files: list[dict] | None = None, fixed_account=None):
         exclude = set()
+        if fixed_account is not None:
+            update_request_context(upstream_attempt=1)
+            acc = fixed_account
+            try:
+                log.info(f"[Executor] using fixed account={acc.email} model={model}")
+                chat_id = await self.create_chat(acc.token, model)
+                update_request_context(chat_id=chat_id)
+                log.info(f"[Executor] created chat_id={chat_id} account={acc.email}")
+                yield {"type": "meta", "chat_id": chat_id, "acc": acc}
+                async for evt in self.stream(acc.token, chat_id, model, content, has_custom_tools, files=files):
+                    yield {"type": "event", "event": evt}
+                return
+            except Exception as e:
+                self.account_pool.release(acc)
+                raise
+
         for attempt in range(settings.MAX_RETRIES):
             update_request_context(upstream_attempt=attempt + 1)
             acc = await self.account_pool.acquire_wait(timeout=60, exclude=exclude)
@@ -141,7 +158,7 @@ class QwenExecutor:
                 log.info(f"[Executor] created chat_id={chat_id} account={acc.email}")
                 yield {"type": "meta", "chat_id": chat_id, "acc": acc}
 
-                async for evt in self.stream(acc.token, chat_id, model, content, has_custom_tools):
+                async for evt in self.stream(acc.token, chat_id, model, content, has_custom_tools, files=files):
                     yield {"type": "event", "event": evt}
                 return
 

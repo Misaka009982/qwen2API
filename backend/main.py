@@ -13,11 +13,17 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend.core.config import settings
 from backend.core.database import AsyncJsonDB
 from backend.core.account_pool import AccountPool
+from backend.core.session_affinity import SessionAffinityStore
+from backend.core.upstream_file_cache import UpstreamFileCache
 from backend.core.request_logging import configure_logging, request_context
 from backend.services.qwen_client import QwenClient
+from backend.services.file_store import LocalFileStore
+from backend.services.context_offload import ContextOffloader
+from backend.services.upstream_file_uploader import UpstreamFileUploader
 import backend.api.models as models
-from backend.api import admin, v1_chat, probes, anthropic, gemini, embeddings, images
+from backend.api import admin, v1_chat, probes, anthropic, gemini, embeddings, images, files_api
 from backend.services.garbage_collector import garbage_collect_chats
+from backend.services.context_cleanup import context_cleanup_loop
 
 configure_logging(getattr(logging, settings.LOG_LEVEL.upper(), logging.INFO))
 log = logging.getLogger("qwen2api")
@@ -31,15 +37,27 @@ async def lifespan(app: FastAPI):
         app.state.accounts_db = AsyncJsonDB(settings.ACCOUNTS_FILE, default_data=[])
         app.state.users_db = AsyncJsonDB(settings.USERS_FILE, default_data=[])
         app.state.captures_db = AsyncJsonDB(settings.CAPTURES_FILE, default_data=[])
+        app.state.session_affinity_db = AsyncJsonDB(settings.CONTEXT_AFFINITY_FILE, default_data=[])
+        app.state.context_cache_db = AsyncJsonDB(settings.CONTEXT_CACHE_FILE, default_data=[])
+        app.state.uploaded_files_db = AsyncJsonDB(settings.UPLOADED_FILES_FILE, default_data=[])
 
         # 初始化组件
         app.state.account_pool = AccountPool(app.state.accounts_db, max_inflight=settings.MAX_INFLIGHT_PER_ACCOUNT)
         app.state.qwen_client = QwenClient(app.state.account_pool)
         app.state.qwen_executor = app.state.qwen_client.executor
+        app.state.file_store = LocalFileStore(settings.CONTEXT_GENERATED_DIR, app.state.uploaded_files_db)
+        app.state.session_affinity = SessionAffinityStore(app.state.session_affinity_db)
+        app.state.upstream_file_cache = UpstreamFileCache(app.state.context_cache_db)
+        app.state.context_offloader = ContextOffloader(settings)
+        app.state.upstream_file_uploader = UpstreamFileUploader(app.state.qwen_client, settings)
 
         # 加载账号并启动后台清理任务
         await app.state.account_pool.load()
+        await app.state.file_store.load()
+        await app.state.session_affinity.load()
+        await app.state.upstream_file_cache.load()
         asyncio.create_task(garbage_collect_chats(app.state.qwen_client))
+        asyncio.create_task(context_cleanup_loop(app))
 
     yield
 
@@ -63,6 +81,7 @@ app.include_router(anthropic.router, tags=["Claude Compatible"])
 app.include_router(gemini.router, tags=["Gemini Compatible"])
 app.include_router(embeddings.router, tags=["Embeddings"])
 app.include_router(images.router, tags=["Images"])
+app.include_router(files_api.router, tags=["Files"])
 app.include_router(probes.router, tags=["Probes"])
 app.include_router(admin.router, prefix="/api/admin", tags=["Dashboard Admin"])
 

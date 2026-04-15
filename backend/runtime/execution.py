@@ -386,6 +386,8 @@ async def collect_completion_run(
         request.resolved_model,
         prompt,
         has_custom_tools=bool(request.tools),
+        files=getattr(request, "upstream_files", None),
+        fixed_account=getattr(request, "bound_account", None),
     ):
         if item.get("type") == "meta":
             chat_id = item.get("chat_id")
@@ -537,6 +539,45 @@ def plan_runtime_attempts(request: StandardRequest, *, initial_prompt: str) -> R
     return RuntimeAttemptPlan(loop=loop, prompt=loop.prompt)
 
 
+def inject_minimal_tool_retry_prompt(prompt: str, request: StandardRequest) -> str:
+    client_profile = getattr(request, "client_profile", CLAUDE_CODE_OPENAI_PROFILE)
+    if client_profile == CLAUDE_CODE_OPENAI_PROFILE:
+        reminder = (
+            "[MANDATORY NEXT STEP]: Your last reply did not produce a usable tool call. "
+            "If a tool is needed, output exactly one minified JSON object and nothing else. "
+            "Example shape: {\"name\":\"TOOL_NAME\",\"input\":{...}}. "
+            "No prose. No markdown. No XML. No wrappers. If no tool is needed, answer normally."
+        )
+    else:
+        reminder = (
+            "[MANDATORY NEXT STEP]: Your last reply did not produce a usable tool call. "
+            "If a tool is needed, output exactly one ##TOOL_CALL## block and nothing else. "
+            "If no tool is needed, answer normally."
+        )
+    return inject_assistant_message(prompt, reminder)
+
+
+def should_retry_toolless_stream_end(request: StandardRequest, state: RuntimeAttemptState, directive: RuntimeToolDirective, current_prompt: str) -> bool:
+    if not request.tools:
+        return False
+    if directive.stop_reason == "tool_use":
+        return False
+    if state.tool_calls:
+        return False
+    answer = (state.answer_text or "").strip()
+    if not answer:
+        return False
+    if "[MANDATORY NEXT STEP]: Your last reply did not produce a usable tool call." in current_prompt:
+        return False
+    lowered = answer.lower()
+    drift_markers = (
+        "i need to", "i should", "let me", "first,", "first ", "next,",
+        "tool", "read", "write", "edit", "glob", "bash", "websearch", "webfetch",
+        "首先", "需要先", "我需要", "我先", "让我", "接下来",
+    )
+    return len(answer) >= 280 or any(marker in lowered for marker in drift_markers)
+
+
 def build_retry_loop(request: StandardRequest, *, initial_prompt: str) -> RuntimeRetryLoop:
     return RuntimeRetryLoop(
         prompt=initial_prompt,
@@ -671,6 +712,11 @@ def evaluate_retry_directive(
                     "search_no_results",
                     inject_assistant_message(current_prompt, force_text),
                 )
+        elif can_retry_after_output and should_retry_toolless_stream_end(request, state, directive, current_prompt):
+            return _retry(
+                "toolless_stream_end",
+                inject_minimal_tool_retry_prompt(current_prompt, request),
+            )
 
     return RuntimeRetryDirective(retry=False, next_prompt=current_prompt)
 

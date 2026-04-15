@@ -103,14 +103,14 @@ class QwenClient:
         except Exception:
             return []
 
-    def _build_payload(self, chat_id: str, model: str, content: str, has_custom_tools: bool = False) -> dict:
-        return build_chat_payload(chat_id, model, content, has_custom_tools)
+    def _build_payload(self, chat_id: str, model: str, content: str, has_custom_tools: bool = False, files: list[dict] | None = None) -> dict:
+        return build_chat_payload(chat_id, model, content, has_custom_tools, files=files)
 
     def parse_sse_chunk(self, chunk: str) -> list[dict]:
         return parse_sse_chunk(chunk)
 
-    async def stream(self, token: str, chat_id: str, model: str, content: str, has_custom_tools: bool = False):
-        async for event in self.executor.stream(token, chat_id, model, content, has_custom_tools):
+    async def stream(self, token: str, chat_id: str, model: str, content: str, has_custom_tools: bool = False, files: list[dict] | None = None):
+        async for event in self.executor.stream(token, chat_id, model, content, has_custom_tools, files=files):
             yield event
 
     async def stream_chat_once(self, token: str, chat_id: str, payload: dict) -> AsyncIterator[dict]:
@@ -130,6 +130,6 @@ class QwenClient:
                         yield {"chunk": chunk}
                 yield {"status": "streamed"}
 
-    async def chat_stream_events_with_retry(self, model: str, content: str, has_custom_tools: bool = False):
-        async for item in self.executor.chat_stream_events_with_retry(model, content, has_custom_tools):
+    async def chat_stream_events_with_retry(self, model: str, content: str, has_custom_tools: bool = False, files: list[dict] | None = None, fixed_account=None):
+        async for item in self.executor.chat_stream_events_with_retry(model, content, has_custom_tools, files=files, fixed_account=fixed_account):
             yield item

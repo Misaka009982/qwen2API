@@ -20,7 +20,7 @@ CUSTOM_TOOL_LOW_LATENCY_OVERRIDES = {
 }
 
 
-def build_chat_payload(chat_id: str, model: str, content: str, has_custom_tools: bool = False) -> dict:
+def build_chat_payload(chat_id: str, model: str, content: str, has_custom_tools: bool = False, files: list[dict] | None = None) -> dict:
     ts = int(time.time())
     feature_config = {
         **CUSTOM_TOOL_COMPAT_FEATURE_CONFIG,
@@ -47,7 +47,7 @@ def build_chat_payload(chat_id: str, model: str, content: str, has_custom_tools:
                 "role": "user",
                 "content": content,
                 "user_action": "chat",
-                "files": [],
+                "files": files or [],
                 "timestamp": ts,
                 "models": [model],
                 "chat_type": "t2t",

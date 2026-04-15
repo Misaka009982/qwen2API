@@ -9,6 +9,7 @@ from backend.adapter.standard_request import StandardRequest
 from backend.core.config import settings
 from backend.core.request_logging import new_request_id, request_context, update_request_context
 from backend.services.attachment_preprocessor import preprocess_attachments
+from backend.services.context_attachment_manager import prepare_context_attachments
 from backend.services.auth_quota import resolve_auth_context
 from backend.services.completion_bridge import run_retryable_completion_bridge
 from backend.services.openai_stream_translator import OpenAIStreamTranslator
@@ -57,20 +58,28 @@ async def chat_completions(request: Request):
         raise HTTPException(400, {"error": {"message": "Invalid JSON body", "type": "invalid_request_error"}})
 
     client_profile = _detect_openai_client_profile(request, req_data)
+    original_history_messages = req_data.get("messages", [])
     file_store = getattr(app.state, "file_store", None)
     preprocessed = None
     if file_store is not None:
-        preprocessed = await preprocess_attachments(req_data, file_store)
+        preprocessed = await preprocess_attachments(req_data, file_store, owner_token=token)
         req_data = preprocessed.payload
+    context_prepared = await prepare_context_attachments(app=app, payload=req_data, surface="openai", auth_token=token, client_profile=client_profile, existing_attachments=(preprocessed.attachments if preprocessed is not None else None))
+    req_data = context_prepared["payload"]
     standard_request = _build_standard_request(req_data, client_profile=client_profile)
     if preprocessed is not None:
         standard_request.attachments = preprocessed.attachments
         standard_request.uploaded_file_ids = preprocessed.uploaded_file_ids
+    standard_request.upstream_files = context_prepared["upstream_files"]
+    standard_request.session_key = context_prepared["session_key"]
+    standard_request.context_mode = context_prepared["context_mode"]
+    standard_request.bound_account_email = context_prepared["bound_account_email"]
+    standard_request.bound_account = context_prepared["bound_account"]
     model_name = standard_request.response_model
     qwen_model = standard_request.resolved_model
     prompt = standard_request.prompt
     tools = standard_request.tools
-    history_messages = req_data.get("messages", [])
+    history_messages = original_history_messages
 
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     created = int(time.time())

@@ -17,6 +17,8 @@ from backend.runtime.execution import (
     request_max_attempts,
 )
 from backend.services.auth_quota import resolve_auth_context
+from backend.services.context_attachment_manager import prepare_context_attachments
+from backend.services.attachment_preprocessor import preprocess_attachments
 from backend.services.prompt_builder import CLAUDE_CODE_OPENAI_PROFILE, messages_to_prompt
 from backend.services.qwen_client import QwenClient
 from backend.toolcall.normalize import build_tool_name_registry
@@ -195,12 +197,26 @@ async def anthropic_messages(request: Request):
     except Exception:
         raise HTTPException(400, {"error": {"message": "Invalid JSON body", "type": "invalid_request_error"}})
 
+    original_history_messages = req_data.get("messages", [])
+
+    file_store = getattr(app.state, "file_store", None)
+    preprocessed = None
+    if file_store is not None:
+        preprocessed = await preprocess_attachments(req_data, file_store, owner_token=token)
+        req_data = preprocessed.payload
+    context_prepared = await prepare_context_attachments(app=app, payload=req_data, surface="anthropic", auth_token=token, client_profile=CLAUDE_CODE_OPENAI_PROFILE, existing_attachments=(preprocessed.attachments if preprocessed is not None else None))
+    req_data = context_prepared["payload"]
     standard_request = _build_standard_request(req_data)
+    standard_request.upstream_files = context_prepared["upstream_files"]
+    standard_request.session_key = context_prepared["session_key"]
+    standard_request.context_mode = context_prepared["context_mode"]
+    standard_request.bound_account_email = context_prepared["bound_account_email"]
+    standard_request.bound_account = context_prepared["bound_account"]
     model_name = standard_request.response_model
     qwen_model = standard_request.resolved_model
     prompt = standard_request.prompt
     msg_id = f"msg_{uuid.uuid4().hex[:12]}"
-    history_messages = req_data.get("messages", [])
+    history_messages = original_history_messages
 
     with request_context(req_id=new_request_id(), surface="anthropic", requested_model=model_name, resolved_model=qwen_model):
         log.info(f"[ANT] model={qwen_model}, stream={standard_request.stream}, tool_enabled={standard_request.tool_enabled}, tools={[t.get('name') for t in standard_request.tools]}, prompt_len={len(prompt)}")
