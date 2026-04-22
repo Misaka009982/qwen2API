@@ -132,6 +132,13 @@ class QwenExecutor:
                     body = chunk_result.get("body", b"")
                     if isinstance(body, bytes):
                         body = body.decode("utf-8", errors="ignore")
+                    outer_status = chunk_result.get("outer_status")
+                    actual_status = chunk_result.get("actual_status")
+                    content_type = chunk_result.get("content_type")
+                    log.warning(
+                        f"[上游] 非流式错误响应 会话={chat_id} outer_status={outer_status!r} "
+                        f"actual_status={actual_status!r} content_type={content_type!r} body预览={str(body)[:500]!r}"
+                    )
                     raise Exception(f"HTTP {chunk_result['status']}: {str(body)[:100]}")
 
                 if "chunk" in chunk_result:
