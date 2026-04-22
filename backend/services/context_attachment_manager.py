@@ -122,7 +122,7 @@ async def prepare_context_attachments(*, app, payload: dict[str, Any], surface: 
         fallback_payload = dict(payload)
         summary_parts: list[str] = []
         if use_generated_context_files and plan.summary_text:
-            summary_parts.append(plan.summary_text[:1200])
+            summary_parts.append(plan.summary_text[:1000000])
         if manual_attachments:
             names = ", ".join(att.filename for att in manual_attachments[:4])
             summary_parts.append(f"User attachments were provided but attachment upload failed. Attachment names: {names}")
