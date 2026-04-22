@@ -401,7 +401,7 @@ def _safe_preview(text: str, limit: int = 240) -> str:
     return compact[:limit] + ("...[truncated]" if len(compact) > limit else "")
 
 
-def _compact_tool_result_body(body: str, *, limit: int = 8000, head: int = 3000, tail: int = 1000) -> str:
+def _compact_tool_result_body(body: str, *, limit: int = 1000000, head: int = 450000, tail: int = 450000) -> str:
     # 浏览器/文件类 tool_result（get_page_content、整页 HTML、长日志）动辄几十 KB，
     # 原样进 prompt 会让 MAX_CHARS 预算瞬间吃光，逼迫前面的轮次被更激进地砍掉。
     # 做 head+tail 保真截断：保留开头找按钮/表单定位，保留末尾找错误/提示。
@@ -433,8 +433,8 @@ def build_prompt_with_tools(system_prompt: str, messages: list, tools: list, *, 
             messages = system_messages + recent_messages
             log.info(f"[Prompt] 截断历史：保留 system + 最近 {MAX_HISTORY_TURNS} 轮 (共 {len(messages)} 条)")
 
-    MAX_CHARS = 40000 if tools else 120000
-    sys_part = "" if tools and client_profile == CLAUDE_CODE_OPENAI_PROFILE else (f"<system>\n{system_prompt[:2000]}\n</system>" if system_prompt else "")
+    MAX_CHARS = 1000000
+    sys_part = "" if tools and client_profile == CLAUDE_CODE_OPENAI_PROFILE else (f"<system>\n{system_prompt[:1000000]}\n</system>" if system_prompt else "")
     tools_part = _build_tool_instruction_block(tools, client_profile) if tools else ""
 
     overhead = len(sys_part) + len(tools_part) + 50
@@ -464,9 +464,9 @@ def build_prompt_with_tools(system_prompt: str, messages: list, tools: list, *, 
                 )
             elif not isinstance(tool_content, str):
                 tool_content = str(tool_content)
-            tool_result_limit = 6000 if (client_profile == CLAUDE_CODE_OPENAI_PROFILE and tools) else 300
+            tool_result_limit = 1000000
             if len(tool_content) > tool_result_limit:
-                tool_content = tool_content[:tool_result_limit] + "...[truncated]"
+                tool_content = tool_content[:tool_result_limit]
             line = f"[Tool Result]{(' id=' + tool_call_id) if tool_call_id else ''}\n{tool_content}\n[/Tool Result]"
             if used + len(line) + 2 > budget and history_parts:
                 break
@@ -505,17 +505,9 @@ def build_prompt_with_tools(system_prompt: str, messages: list, tools: list, *, 
             or text.startswith("{")
             or "\"results\"" in text[:100]
         )
-        if client_profile == CLAUDE_CODE_OPENAI_PROFILE and tools:
-            if is_tool_result:
-                max_len = 6000
-            elif role == "assistant":
-                max_len = 500
-            else:
-                max_len = 1600
-        else:
-            max_len = 600 if is_tool_result else 1400
+        max_len = 1000000
         if len(text) > max_len:
-            text = text[:max_len] + "...[truncated]"
+            text = text[:max_len]
         is_tool_result_only_user_msg = role == "user" and not user_text_only.strip() and bool(text.strip())
         prefix = "" if is_tool_result_only_user_msg else {"user": "Human: ", "assistant": "Assistant: ", "system": "System: "}.get(role, "")
         line = text if is_tool_result_only_user_msg else f"{prefix}{text}"
@@ -538,7 +530,7 @@ def build_prompt_with_tools(system_prompt: str, messages: list, tools: list, *, 
         )
         if first_user:
             first_text = _extract_user_text_only(first_user.get("content", ""), client_profile=client_profile)
-            first_short = first_text[:800] + ("...[original task truncated]" if len(first_text) > 800 else "")
+            first_short = first_text[:1000000]
             first_line = f"Human (ORIGINAL TASK): {first_short}" if client_profile == CLAUDE_CODE_OPENAI_PROFILE else f"Human: {first_short}"
             if not history_parts or not history_parts[0].startswith(f"Human: {first_text[:60]}") and not history_parts[0].startswith(f"Human (ORIGINAL TASK): {first_text[:60]}"):
                 first_line_cost = len(first_line) + 2
@@ -564,7 +556,7 @@ def build_prompt_with_tools(system_prompt: str, messages: list, tools: list, *, 
         if latest_user:
             latest_text = _extract_user_text_only(latest_user.get("content", ""), client_profile=client_profile).strip()
             if latest_text:
-                latest_short = latest_text[:900] + ("...[latest task truncated]" if len(latest_text) > 900 else "")
+                latest_short = latest_text[:1000000]
                 latest_user_line = f"Human (CURRENT TASK - TOP PRIORITY): {latest_short}"
 
 
