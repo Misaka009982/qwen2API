@@ -174,9 +174,33 @@ class QwenClient:
             headers=self._build_headers(token),
             json=payload,
         ) as resp:
-            if resp.status_code != 200:
-                yield {"status": resp.status_code, "body": await resp.aread()}
+            content_type = resp.headers.get("content-type", "")
+            actual_status_raw = resp.headers.get("x-actual-status-code")
+            actual_status: int | str | None = None
+            if actual_status_raw:
+                try:
+                    actual_status = int(actual_status_raw)
+                except ValueError:
+                    actual_status = actual_status_raw
+
+            if resp.status_code != 200 or actual_status not in (None, 200, "200") or "application/json" in content_type.lower():
+                body_text = (await resp.aread()).decode("utf-8", errors="replace")
+                effective_status = resp.status_code
+                if effective_status == 200:
+                    effective_status = actual_status if actual_status not in (None, 200, "200") else "non_sse_200"
+                    log.warning(
+                        f"[上游HTTP] 检测到非SSE响应 outer_status={resp.status_code} "
+                        f"actual_status={actual_status!r} content_type={content_type} body预览={body_text[:500]!r}"
+                    )
+                yield {
+                    "status": effective_status,
+                    "body": body_text,
+                    "outer_status": resp.status_code,
+                    "actual_status": actual_status,
+                    "content_type": content_type,
+                }
                 return
+
             # 使用 aiter_text() 保证 UTF-8 正确处理和 SSE 格式完整
             async for chunk in resp.aiter_text():
                 if chunk:
