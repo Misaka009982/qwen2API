@@ -19,6 +19,25 @@ log = logging.getLogger("qwen2api.tool_parser")
 CASE_SENSITIVE_TOOL_NAMES = {"Bash", "Edit", "Write", "Read", "Grep", "Glob", "WebFetch", "WebSearch"}
 
 
+def _unwrap_assistant_message_content(text: str) -> str:
+    """Handle upstream emitting an entire assistant message JSON as plain text."""
+    stripped = text.strip()
+    if not stripped.startswith("{"):
+        return text
+    try:
+        payload = json.loads(stripped)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return text
+    if not isinstance(payload, dict):
+        return text
+    if payload.get("role") != "assistant":
+        return text
+    content = payload.get("content")
+    if not isinstance(content, str):
+        return text
+    return content
+
+
 def _normalize_tool_name_case(name: str, tool_names: set[str]) -> str:
     if not isinstance(name, str) or not name:
         return name
@@ -135,7 +154,7 @@ def _extract_first_json_tool_call(text: str) -> str | None:
 
 
 def _normalize_fragmented_tool_call(answer: str) -> str:
-    text = answer.strip()
+    text = _unwrap_assistant_message_content(answer).strip()
     masked_text = mask_ignored_tool_syntax_regions(text)
     if "##TOOL_CALL##" in masked_text and "##END_CALL##" in masked_text:
         return text
