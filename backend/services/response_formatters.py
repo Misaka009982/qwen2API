@@ -4,10 +4,12 @@ import json
 from typing import Any
 
 from backend.runtime.execution import build_tool_directive
+from backend.services.token_calc import calculate_execution_usage, to_anthropic_usage, to_gemini_usage_metadata, to_openai_usage
 
 
 def build_openai_completion_payload(*, completion_id: str, created: int, model_name: str, prompt: str, execution, standard_request) -> dict[str, Any]:
     directive = build_tool_directive(standard_request, execution.state)
+    usage = calculate_execution_usage(prompt, execution)
     if directive.stop_reason == "tool_use":
         oai_tool_calls = [
             {
@@ -50,16 +52,13 @@ def build_openai_completion_payload(*, completion_id: str, created: int, model_n
         "created": created,
         "model": model_name,
         "choices": [{"index": 0, "message": msg, "finish_reason": finish_reason}],
-        "usage": {
-            "prompt_tokens": len(prompt),
-            "completion_tokens": len(execution.state.answer_text),
-            "total_tokens": len(prompt) + len(execution.state.answer_text),
-        },
+        "usage": to_openai_usage(usage),
     }
 
 
 def build_anthropic_message_payload(*, msg_id: str, model_name: str, prompt: str, execution, standard_request) -> dict[str, Any]:
     directive = build_tool_directive(standard_request, execution.state)
+    usage = calculate_execution_usage(prompt, execution)
     content_blocks: list[dict[str, Any]] = []
     if execution.state.reasoning_text:
         content_blocks.append({"type": "thinking", "thinking": execution.state.reasoning_text})
@@ -72,11 +71,12 @@ def build_anthropic_message_payload(*, msg_id: str, model_name: str, prompt: str
         "content": content_blocks,
         "stop_reason": directive.stop_reason,
         "stop_sequence": None,
-        "usage": {"input_tokens": len(prompt), "output_tokens": len(execution.state.answer_text)},
+        "usage": to_anthropic_usage(usage),
     }
 
 
-def build_gemini_generate_payload(*, execution) -> dict[str, Any]:
+def build_gemini_generate_payload(*, prompt: str, execution) -> dict[str, Any]:
+    usage = calculate_execution_usage(prompt, execution)
     return {
         "candidates": [
             {
@@ -85,5 +85,6 @@ def build_gemini_generate_payload(*, execution) -> dict[str, Any]:
                     "role": "model",
                 }
             }
-        ]
+        ],
+        "usageMetadata": to_gemini_usage_metadata(usage),
     }
