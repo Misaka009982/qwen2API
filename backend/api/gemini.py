@@ -12,7 +12,8 @@ from backend.core.request_logging import new_request_id, request_context, update
 from backend.runtime import stream_presenter
 from backend.runtime.execution import collect_completion_run, cleanup_runtime_resources
 from backend.services.auth_quota import resolve_auth_context
-from backend.services.token_calc import calculate_usage
+from backend.services.response_formatters import build_gemini_generate_payload
+from backend.services.token_calc import calculate_execution_usage, to_gemini_usage_metadata
 
 log = logging.getLogger("qwen2api.gemini")
 router = APIRouter()
@@ -69,7 +70,7 @@ async def gemini_generate_content(model: str, request: Request):
             log.error(f"Gemini proxy failed: {e}")
             raise HTTPException(status_code=500, detail=str(e))
 
-        usage = calculate_usage(content, execution.state.answer_text)
+        usage = calculate_execution_usage(content, execution)
         users = await users_db.get()
         for u in users:
             if u["id"] == token:
@@ -79,18 +80,7 @@ async def gemini_generate_content(model: str, request: Request):
         await cleanup_runtime_resources(client, execution.acc, execution.chat_id)
 
         log.info(f"[Gemini] Request complete. Generated {len(execution.state.answer_text)} characters.")
-        return JSONResponse(
-            {
-                "candidates": [
-                    {
-                        "content": {
-                            "parts": [{"text": execution.state.answer_text}],
-                            "role": "model",
-                        }
-                    }
-                ]
-            }
-        )
+        return JSONResponse(build_gemini_generate_payload(prompt=content, execution=execution))
 
 
 @router.post("/v1beta/models/{model}:streamGenerateContent")
@@ -120,13 +110,14 @@ async def gemini_stream_generate_content(model: str, request: Request):
                         on_delta=on_delta,
                     )
 
-                    usage = calculate_usage(content, execution.state.answer_text)
+                    usage = calculate_execution_usage(content, execution)
                     users = await users_db.get()
                     for u in users:
                         if u["id"] == token:
                             u["used_tokens"] += usage["total_tokens"]
                             break
                     await users_db.save(users)
+                    await queue.put(stream_presenter.gemini_usage_chunk(to_gemini_usage_metadata(usage)))
                     await cleanup_runtime_resources(client, execution.acc, execution.chat_id)
                     log.info(f"[Gemini] Request complete. Generated {len(execution.state.answer_text)} characters.")
                 except Exception as e:
