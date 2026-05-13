@@ -5,6 +5,7 @@ from typing import Any, Callable
 
 from backend.adapter.standard_request import CLAUDE_CODE_OPENAI_PROFILE, OPENCLAW_OPENAI_PROFILE
 from backend.runtime.execution import RuntimeToolDirective
+from backend.services.token_calc import to_openai_usage
 from backend.toolcall.parser import parse_tool_calls_detailed
 
 
@@ -23,6 +24,7 @@ class OpenAIStreamTranslator:
         client_profile: str,
         build_final_directive: Callable[[str], RuntimeToolDirective] | None = None,
         allowed_tool_names: list[str] | None = None,
+        include_usage: bool = False,
     ):
         self.completion_id = completion_id
         self.created = created
@@ -30,6 +32,7 @@ class OpenAIStreamTranslator:
         self.client_profile = client_profile
         self.build_final_directive = build_final_directive
         self.allowed_tool_names = {name for name in (allowed_tool_names or []) if isinstance(name, str) and name}
+        self.include_usage = include_usage
         self.pending_chunks: list[str] = []
         self.role_chunk_sent = False
         self.emitted_tool_index = 0
@@ -145,39 +148,3 @@ class OpenAIStreamTranslator:
         for tool_call in tool_calls:
             idx = self.emitted_tool_index
             self.emitted_tool_index += 1
-            self.pending_chunks.append(
-                f"data: {json.dumps({'id': self.completion_id, 'object': 'chat.completion.chunk', 'created': self.created, 'model': self.model_name, 'choices': [{'index': 0, 'delta': {'tool_calls': [{'index': idx, 'id': tool_call['id'], 'type': 'function', 'function': {'name': tool_call['name'], 'arguments': json.dumps(tool_call['input'], ensure_ascii=False)}}]}, 'finish_reason': None}]}, ensure_ascii=False)}\n\n"
-            )
-        if tool_calls:
-            self.tool_calls_emitted = True
-
-    def finalize(self, finish_reason: str) -> list[str]:
-        final_finish_reason = finish_reason
-        buffered_text = "".join(self.buffered_toolish_fragments)
-        if self.build_final_directive is not None and not self.tool_calls_emitted:
-            directive = self.build_final_directive("".join(self.answer_fragments))
-            if self._should_finalize_tool_calls(directive):
-                self._discard_pending_content_chunks()
-                tool_calls = [
-                    {
-                        "id": block["id"],
-                        "name": block["name"],
-                        "input": block.get("input", {}),
-                    }
-                    for block in directive.tool_blocks
-                    if block.get("type") == "tool_use"
-                ]
-                if tool_calls:
-                    self.emit_tool_calls(tool_calls)
-                    final_finish_reason = "tool_calls"
-            elif buffered_text:
-                self._emit_content_chunk(buffered_text)
-        elif buffered_text and not self.tool_calls_emitted:
-            self._emit_content_chunk(buffered_text)
-
-        chunks = list(self.pending_chunks)
-        chunks.append(
-            f"data: {json.dumps({'id': self.completion_id, 'object': 'chat.completion.chunk', 'created': self.created, 'model': self.model_name, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': final_finish_reason}]}, ensure_ascii=False)}\n\n"
-        )
-        chunks.append("data: [DONE]\n\n")
-        return chunks
