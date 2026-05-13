@@ -216,6 +216,8 @@ async def responses_create(request: Request):
     qwen_model = standard_request.resolved_model
     prompt = standard_request.prompt
     history_messages = original_history_messages
+    stream_options = chat_req_data.get("stream_options") if isinstance(chat_req_data.get("stream_options"), dict) else {}
+    include_usage = bool(stream_options.get("include_usage"))
     response_id = f"resp_{uuid.uuid4().hex}"
     created = int(time.time())
 
@@ -246,7 +248,7 @@ async def responses_create(request: Request):
                                 RuntimeAttemptState(answer_text=answer_text),
                             ),
                             allowed_tool_names=standard_request.tool_names,
-                            include_usage=False,
+                            include_usage=include_usage,
                         )
 
                         async def on_delta(evt: dict[str, Any], text_chunk: str | None, tool_calls: list[dict[str, Any]] | None) -> None:
