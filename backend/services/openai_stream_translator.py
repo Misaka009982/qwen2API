@@ -148,3 +148,43 @@ class OpenAIStreamTranslator:
         for tool_call in tool_calls:
             idx = self.emitted_tool_index
             self.emitted_tool_index += 1
+            self.pending_chunks.append(
+                f"data: {json.dumps({'id': self.completion_id, 'object': 'chat.completion.chunk', 'created': self.created, 'model': self.model_name, 'choices': [{'index': 0, 'delta': {'tool_calls': [{'index': idx, 'id': tool_call['id'], 'type': 'function', 'function': {'name': tool_call['name'], 'arguments': json.dumps(tool_call['input'], ensure_ascii=False)}}]}, 'finish_reason': None}]}, ensure_ascii=False)}\n\n"
+            )
+        if tool_calls:
+            self.tool_calls_emitted = True
+
+    def finalize(self, finish_reason: str, usage: dict[str, int] | None = None) -> list[str]:
+        final_finish_reason = finish_reason
+        buffered_text = "".join(self.buffered_toolish_fragments)
+        if self.build_final_directive is not None and not self.tool_calls_emitted:
+            directive = self.build_final_directive("".join(self.answer_fragments))
+            if self._should_finalize_tool_calls(directive):
+                self._discard_pending_content_chunks()
+                tool_calls = [
+                    {
+                        "id": block["id"],
+                        "name": block["name"],
+                        "input": block.get("input", {}),
+                    }
+                    for block in directive.tool_blocks
+                    if block.get("type") == "tool_use"
+                ]
+                if tool_calls:
+                    self.emit_tool_calls(tool_calls)
+                    final_finish_reason = "tool_calls"
+            elif buffered_text:
+                self._emit_content_chunk(buffered_text)
+        elif buffered_text and not self.tool_calls_emitted:
+            self._emit_content_chunk(buffered_text)
+
+        chunks = list(self.pending_chunks)
+        if self.include_usage and usage is not None:
+            chunks.append(
+                f"data: {json.dumps({'id': self.completion_id, 'object': 'chat.completion.chunk', 'created': self.created, 'model': self.model_name, 'choices': [], 'usage': to_openai_usage(usage)}, ensure_ascii=False)}\n\n"
+            )
+        chunks.append(
+            f"data: {json.dumps({'id': self.completion_id, 'object': 'chat.completion.chunk', 'created': self.created, 'model': self.model_name, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': final_finish_reason}]}, ensure_ascii=False)}\n\n"
+        )
+        chunks.append("data: [DONE]\n\n")
+        return chunks
