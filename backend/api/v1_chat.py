@@ -17,6 +17,7 @@ from backend.services.prompt_builder import CLAUDE_CODE_OPENAI_PROFILE, OPENCLAW
 from backend.services.response_formatters import build_openai_completion_payload
 from backend.services.qwen_client import QwenClient
 from backend.services.standard_request_builder import build_chat_standard_request
+from backend.services.token_calc import calculate_execution_usage
 from backend.services.task_session import (
     build_openai_assistant_history_message,
     clear_invalidated_session_chat,
@@ -111,6 +112,8 @@ async def chat_completions(request: Request):
     prompt = standard_request.prompt
     tools = standard_request.tools
     history_messages = original_history_messages
+    stream_options = req_data.get("stream_options") if isinstance(req_data.get("stream_options"), dict) else {}
+    include_usage = bool(stream_options.get("include_usage"))
 
     completion_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     created = int(time.time())
@@ -142,6 +145,7 @@ async def chat_completions(request: Request):
                                 RuntimeAttemptState(answer_text=answer_text),
                             ),
                             allowed_tool_names=standard_request.tool_names,
+                            include_usage=include_usage,
                         )
 
                         async def on_delta(evt: dict[str, Any], text_chunk: str | None, tool_calls: list[dict[str, Any]] | None) -> None:
@@ -175,7 +179,8 @@ async def chat_completions(request: Request):
                             assistant_message=assistant_message,
                         )
                         final_finish_reason = "tool_calls" if directive.stop_reason == "tool_use" else execution.state.finish_reason
-                        for chunk in translator.finalize(final_finish_reason):
+                        usage = calculate_execution_usage(result.prompt, execution)
+                        for chunk in translator.finalize(final_finish_reason, usage=usage):
                             yield chunk
                         return
                     except HTTPException as he:
