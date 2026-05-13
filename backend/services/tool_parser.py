@@ -156,7 +156,7 @@ def _extract_first_json_tool_call(text: str) -> str | None:
 def _normalize_fragmented_tool_call(answer: str) -> str:
     text = _unwrap_assistant_message_content(answer).strip()
     masked_text = mask_ignored_tool_syntax_regions(text)
-    if "##TOOL_CALL##" in masked_text and "##END_CALL##" in masked_text:
+    if "##TOOL_CALL##" in masked_text:
         return text
 
     extracted_tool_call = _extract_first_xml_tool_call(text) or _extract_first_json_tool_call(text)
@@ -300,6 +300,49 @@ def _coerce_tool_input(name: str, input_data: Any, tools: list[dict[str, Any]]) 
     return input_data
 
 
+def _extract_marked_json_tool_calls(answer: str) -> tuple[str, list[dict[str, Any]]] | None:
+    """Extract JSON objects after ##TOOL_CALL##, even if ##END_CALL## is missing."""
+    masked = mask_ignored_tool_syntax_regions(answer)
+    marker_re = re.compile(r"##TOOL_CALL##", re.IGNORECASE)
+    decoder = json.JSONDecoder()
+    prefix = ""
+    parsed_calls: list[dict[str, Any]] = []
+    consumed_until = 0
+
+    for match in marker_re.finditer(masked):
+        if match.start() < consumed_until:
+            continue
+
+        json_start = match.end()
+        while json_start < len(answer) and answer[json_start].isspace():
+            json_start += 1
+
+        try:
+            obj, json_end = decoder.raw_decode(answer, json_start)
+        except (json.JSONDecodeError, ValueError):
+            continue
+
+        if not isinstance(obj, dict) or not obj.get("name"):
+            consumed_until = max(consumed_until, json_end)
+            continue
+
+        if not parsed_calls:
+            prefix = answer[:match.start()].strip()
+
+        inp = obj.get("input", obj.get("args", obj.get("arguments", obj.get("parameters", {}))))
+        if isinstance(inp, str):
+            try:
+                inp = json.loads(inp)
+            except Exception:
+                inp = {"value": inp}
+        parsed_calls.append({"name": obj.get("name", ""), "input": inp})
+        consumed_until = json_end
+
+    if not parsed_calls:
+        return None
+    return prefix, parsed_calls
+
+
 def parse_tool_calls(answer: str, tools: list):
     return _parse_tool_calls(answer, tools, emit_logs=True)
 
@@ -342,11 +385,17 @@ def _parse_tool_calls(answer: str, tools: list, *, emit_logs: bool):
             blocks.append({"type": "text", "text": prefix})
 
         for call in parsed_calls:
-            name = from_qwen_name(call.get("name", ""))
+            raw_name = call.get("name", "")
+            name = from_qwen_name(raw_name)
             normalized_name = normalize_tool_name(name, tool_registry.values())
             cased_name = _normalize_tool_name_case(normalized_name, tool_names)
             if cased_name not in tool_names:
-                _log_warning(f"[ToolParse] 工具名不匹配，回退为普通文本: name={name!r}, normalized={normalized_name!r}, cased={cased_name!r}, tools={tool_names}")
+                raw_normalized_name = normalize_tool_name(raw_name, tool_registry.values())
+                raw_cased_name = _normalize_tool_name_case(raw_normalized_name, tool_names)
+                if raw_cased_name in tool_names:
+                    cased_name = raw_cased_name
+            if cased_name not in tool_names:
+                _log_warning(f"[ToolParse] 工具名不匹配，回退为普通文本: raw={raw_name!r}, name={name!r}, normalized={normalized_name!r}, cased={cased_name!r}, tools={tool_names}")
                 return [{"type": "text", "text": answer}], "end_turn"
             coerced_input = _coerce_tool_input(cased_name, call.get("input", {}), tools)
             # 智能引号修复 + Edit/StrReplace 的 old_string fuzzy 修复
@@ -365,6 +414,12 @@ def _parse_tool_calls(answer: str, tools: list, *, emit_logs: bool):
             f"calls={[call.get('name') for call in detailed_calls]!r}"
         )
         return _make_tool_blocks(detailed_calls)
+
+    marked_json_calls = _extract_marked_json_tool_calls(answer)
+    if marked_json_calls:
+        prefix, parsed_calls = marked_json_calls
+        _log_info(f"[ToolParse] ✓ marked JSON format: calls={[call['name'] for call in parsed_calls]!r}")
+        return _make_tool_blocks(parsed_calls, prefix)
 
     tc_matches = list(re.finditer(r'##TOOL_CALL##\s*(.*?)\s*##END_CALL##', answer, re.DOTALL | re.IGNORECASE))
     if tc_matches:
