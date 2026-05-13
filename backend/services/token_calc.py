@@ -94,11 +94,17 @@ def calculate_execution_usage(prompt: str, execution) -> dict[str, int]:
     )
 
 
-def to_openai_usage(usage: dict[str, int]) -> dict[str, int]:
+def to_openai_usage(usage: dict[str, int]) -> dict[str, Any]:
     return {
         "prompt_tokens": usage["prompt_tokens"],
         "completion_tokens": usage["completion_tokens"],
         "total_tokens": usage["total_tokens"],
+        "cache_creation_input_tokens": 0,
+        "prompt_tokens_details": {
+            "audio_tokens": 0,
+            "cached_tokens": 0,
+        },
+        "completion_tokens_details": None,
     }
 
 
