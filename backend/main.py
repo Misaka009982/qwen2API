@@ -22,7 +22,7 @@ from backend.services.file_store import LocalFileStore
 from backend.services.context_offload import ContextOffloader
 from backend.services.upstream_file_uploader import UpstreamFileUploader
 import backend.api.models as models
-from backend.api import admin, v1_chat, probes, anthropic, gemini, embeddings, images, files_api
+from backend.api import admin, v1_chat, probes, anthropic, gemini, embeddings, images, files_api, responses
 from backend.services.garbage_collector import garbage_collect_chats
 from backend.services.context_cleanup import context_cleanup_loop
 
@@ -91,6 +91,7 @@ app.add_middleware(
 
 # 挂载路由
 app.include_router(v1_chat.router, tags=["OpenAI Compatible"])
+app.include_router(responses.router, tags=["OpenAI Responses Compatible"])
 app.include_router(models.router, tags=["Models"])
 app.include_router(anthropic.router, tags=["Claude Compatible"])
 app.include_router(gemini.router, tags=["Gemini Compatible"])
