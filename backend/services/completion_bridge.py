@@ -8,7 +8,7 @@ from backend.adapter.standard_request import StandardRequest
 from backend.runtime.execution import build_tool_directive, cleanup_runtime_resources, collect_completion_run, evaluate_retry_directive
 from backend.services.auth_quota import add_used_tokens
 from backend.services.task_session import build_retry_rebase_prompt
-from backend.services.token_calc import calculate_usage
+from backend.services.token_calc import calculate_execution_usage
 
 
 @dataclass(slots=True)
@@ -46,7 +46,7 @@ async def run_completion_bridge(
         capture_events=capture_events,
         on_delta=on_delta,
     )
-    usage = calculate_usage(prompt, execution.state.answer_text)
+    usage = calculate_execution_usage(prompt, execution)
     await add_used_tokens(users_db, token, usage_delta if usage_delta is not None else usage["total_tokens"])
     await cleanup_runtime_resources(
         client,
@@ -107,7 +107,7 @@ async def run_retryable_completion_bridge(
             await _reacquire_bound_account_if_needed(client=client, standard_request=standard_request)
             continue
 
-        usage = calculate_usage(current_prompt, execution.state.answer_text)
+        usage = calculate_execution_usage(current_prompt, execution)
         usage_delta = usage_delta_factory(execution, current_prompt) if usage_delta_factory is not None else usage["total_tokens"]
         directive = build_tool_directive(standard_request, execution.state)
         await add_used_tokens(users_db, token, usage_delta)
