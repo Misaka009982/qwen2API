@@ -183,8 +183,20 @@ class OpenAIStreamTranslator:
             chunks.append(
                 f"data: {json.dumps({'id': self.completion_id, 'object': 'chat.completion.chunk', 'created': self.created, 'model': self.model_name, 'choices': [], 'usage': to_openai_usage(usage)}, ensure_ascii=False)}\n\n"
             )
+        final_chunk_payload = {
+            'id': self.completion_id,
+            'object': 'chat.completion.chunk',
+            'created': self.created,
+            'model': self.model_name,
+            'choices': [{'index': 0, 'delta': {}, 'finish_reason': final_finish_reason}],
+        }
+        # Some OpenAI-compatible clients only inspect the terminal finish chunk when
+        # reconstructing the final response object. Duplicating usage here keeps
+        # stream_options.include_usage semantics while improving compatibility.
+        if usage is not None:
+            final_chunk_payload['usage'] = to_openai_usage(usage)
         chunks.append(
-            f"data: {json.dumps({'id': self.completion_id, 'object': 'chat.completion.chunk', 'created': self.created, 'model': self.model_name, 'choices': [{'index': 0, 'delta': {}, 'finish_reason': final_finish_reason}]}, ensure_ascii=False)}\n\n"
+            f"data: {json.dumps(final_chunk_payload, ensure_ascii=False)}\n\n"
         )
         chunks.append("data: [DONE]\n\n")
         return chunks
