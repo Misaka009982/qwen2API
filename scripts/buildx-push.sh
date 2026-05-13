@@ -27,6 +27,10 @@ docker buildx inspect --bootstrap >/dev/null
 echo "[buildx] building and pushing ${IMAGE_TAG}"
 echo "[buildx] platforms: ${PLATFORMS}"
 
-docker buildx build +  --platform "${PLATFORMS}" +  -t "${IMAGE_TAG}" +  --push +  .
+docker buildx build \
+  --platform "${PLATFORMS}" \
+  -t "${IMAGE_TAG}" \
+  --push \
+  .
 
 echo "[buildx] done: ${IMAGE_TAG}"
