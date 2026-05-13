@@ -25,6 +25,23 @@ def _jitter_seconds() -> float:
 class AccountAcquireMixin:
     """账号获取逻辑混入类"""
 
+    async def _remove_waiter(self, waiter: asyncio.Event) -> None:
+        """
+        从等待队列中移除 waiter（若仍在队列中）。
+
+        acquire_wait* 可能因超时返回；若不清理 waiter，队列长度会持续增长，
+        在 max_queue_size 较小时会出现“队列假满”并拒绝后续请求。
+        """
+        async with self._lock:
+            queue = getattr(self._waiters_queue, "_queue", None)
+            if queue is None:
+                return
+            try:
+                queue.remove(waiter)
+            except ValueError:
+                # 已被 release() 的 notify 弹出，属于正常竞争场景
+                pass
+
     async def acquire(self, exclude: Optional[set] = None) -> Optional["Account"]:
         """
         立即获取账号（不等待）
@@ -131,101 +148,3 @@ class AccountAcquireMixin:
             await self._waiters_queue.put(waiter)
 
             # 计算等待时间
-            wait_timeout = min(remaining, max(0.05, next_ready_at - time.time() + 0.05))
-
-            try:
-                await asyncio.wait_for(waiter.wait(), timeout=wait_timeout)
-            except asyncio.TimeoutError:
-                pass
-
-    async def acquire_wait_preferred(
-        self, preferred_email: Optional[str] = None, timeout: float = 60, exclude: Optional[set] = None
-    ) -> Optional["Account"]:
-        """
-        等待获取指定账号
-        对齐 ds2api 的 AcquireWaitPreferred() 逻辑
-        """
-        deadline = time.time() + timeout
-
-        while True:
-            acc = await self.acquire_preferred(preferred_email, exclude)
-            if acc:
-                return acc
-
-            remaining = deadline - time.time()
-            if remaining <= 0:
-                return None
-
-            if not self._can_queue():
-                return None
-
-            waiter = asyncio.Event()
-            await self._waiters_queue.put(waiter)
-
-            try:
-                await asyncio.wait_for(waiter.wait(), timeout=min(remaining, 0.5))
-            except asyncio.TimeoutError:
-                pass
-
-    def release(self, acc: "Account"):
-        """
-        释放账号
-        对齐 ds2api 的 Release() 逻辑
-        """
-        if not acc or not acc.email:
-            return
-
-        acc.inflight = max(0, acc.inflight - 1)
-        acc.last_request_finished = time.time()
-        self.global_in_use = max(0, self.global_in_use - 1)
-
-        # 唤醒等待队列中的第一个
-        self._notify_waiter()
-
-    def _notify_waiter(self):
-        """
-        唤醒等待队列中的第一个等待者
-        对齐 ds2api 的 notifyWaiterLocked()
-        """
-        if self._waiters_queue.empty():
-            return
-
-        try:
-            waiter = self._waiters_queue.get_nowait()
-            waiter.set()  # 唤醒
-        except asyncio.QueueEmpty:
-            pass
-
-    def mark_invalid(self, acc: "Account", reason: str = "invalid", error_message: str = ""):
-        """标记账号为不可用"""
-        acc.valid = False
-        acc.status_code = reason or "invalid"
-        acc.last_error = error_message or acc.last_error
-        acc.consecutive_failures += 1
-        if reason == "pending_activation":
-            acc.activation_pending = True
-        if self._sticky_email == acc.email:
-            self._sticky_email = None
-        log.warning(f"[账号] {acc.email} 已标记为不可用，状态={acc.status_code}")
-
-    def mark_success(self, acc: "Account"):
-        """标记账号请求成功"""
-        acc.consecutive_failures = 0
-        acc.rate_limit_strikes = 0
-        if acc.status_code == "rate_limited":
-            acc.status_code = "valid"
-        if not acc.activation_pending:
-            acc.valid = True
-
-    def mark_rate_limited(self, acc: "Account", cooldown: int | None = None, error_message: str = ""):
-        """标记账号被限流"""
-        acc.rate_limit_strikes += 1
-        base = cooldown if cooldown is not None else settings.RATE_LIMIT_BASE_COOLDOWN
-        dynamic = min(settings.RATE_LIMIT_MAX_COOLDOWN, int(base * (2 ** max(0, acc.rate_limit_strikes - 1))))
-        dynamic += int(_jitter_seconds())
-        acc.rate_limited_until = time.time() + dynamic
-        acc.status_code = "rate_limited"
-        acc.last_error = error_message or acc.last_error
-        if self._sticky_email == acc.email:
-            self._sticky_email = None
-        log.warning(f"[账号] {acc.email} 已限流冷却 {dynamic} 秒")
