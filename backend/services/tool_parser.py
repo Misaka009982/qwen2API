@@ -7,7 +7,7 @@ from typing import Any, cast
 from backend.adapter.standard_request import CLAUDE_CODE_OPENAI_PROFILE, OPENCLAW_OPENAI_PROFILE
 from backend.core.request_logging import get_request_context
 from backend.services.tool_arg_fixer import fix_tool_call_arguments
-from backend.services.tool_name_obfuscation import from_qwen_name
+from backend.services.tool_name_obfuscation import from_qwen_name, to_qwen_name
 from backend.toolcall.normalize import build_tool_name_registry, normalize_tool_name
 from backend.toolcall.parser import mask_ignored_tool_syntax_regions, parse_tool_calls_detailed
 
@@ -394,6 +394,18 @@ def _parse_tool_calls(answer: str, tools: list, *, emit_logs: bool):
                 raw_cased_name = _normalize_tool_name_case(raw_normalized_name, tool_names)
                 if raw_cased_name in tool_names:
                     cased_name = raw_cased_name
+            if cased_name not in tool_names:
+                reobfuscated_name = to_qwen_name(name)
+                reobfuscated_normalized_name = normalize_tool_name(reobfuscated_name, tool_registry.values())
+                reobfuscated_cased_name = _normalize_tool_name_case(reobfuscated_normalized_name, tool_names)
+                if reobfuscated_cased_name in tool_names:
+                    cased_name = reobfuscated_cased_name
+            if cased_name not in tool_names:
+                raw_reobfuscated_name = to_qwen_name(raw_name)
+                raw_reobfuscated_normalized_name = normalize_tool_name(raw_reobfuscated_name, tool_registry.values())
+                raw_reobfuscated_cased_name = _normalize_tool_name_case(raw_reobfuscated_normalized_name, tool_names)
+                if raw_reobfuscated_cased_name in tool_names:
+                    cased_name = raw_reobfuscated_cased_name
             if cased_name not in tool_names:
                 _log_warning(f"[ToolParse] 工具名不匹配，回退为普通文本: raw={raw_name!r}, name={name!r}, normalized={normalized_name!r}, cased={cased_name!r}, tools={tool_names}")
                 return [{"type": "text", "text": answer}], "end_turn"
