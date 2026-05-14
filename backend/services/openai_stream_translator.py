@@ -159,7 +159,8 @@ class OpenAIStreamTranslator:
         buffered_text = "".join(self.buffered_toolish_fragments)
         if self.build_final_directive is not None and not self.tool_calls_emitted:
             directive = self.build_final_directive("".join(self.answer_fragments))
-            if self._should_finalize_tool_calls(directive):
+            should_force_tool_calls = finish_reason == "tool_calls" or self._should_finalize_tool_calls(directive)
+            if should_force_tool_calls:
                 self._discard_pending_content_chunks()
                 tool_calls = [
                     {
@@ -173,9 +174,9 @@ class OpenAIStreamTranslator:
                 if tool_calls:
                     self.emit_tool_calls(tool_calls)
                     final_finish_reason = "tool_calls"
-            elif buffered_text:
+            elif buffered_text and final_finish_reason != "tool_calls":
                 self._emit_content_chunk(buffered_text)
-        elif buffered_text and not self.tool_calls_emitted:
+        elif buffered_text and not self.tool_calls_emitted and final_finish_reason != "tool_calls":
             self._emit_content_chunk(buffered_text)
 
         chunks = list(self.pending_chunks)
