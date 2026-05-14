@@ -18,11 +18,18 @@ import re
 # 高价值显式别名：这些短名最容易被 Qwen 内置函数命中，用完全独立的 snake_case。
 TOOL_NAME_ALIASES: dict[str, str] = {
     "Read": "fs_open_file",
+    "read": "fs_open_file",
     "Write": "fs_put_file",
+    "write": "fs_put_file",
     "Edit": "fs_patch_file",
+    "edit": "fs_patch_file",
     "Bash": "shell_run",
+    "bash": "shell_run",
     "Grep": "text_search",
+    "grep": "text_search",
     "Glob": "path_find",
+    "find": "path_find",
+    "ls": "dir_list",
     "NotebookEdit": "notebook_patch",
     "WebFetch": "http_get_url",
     "WebSearch": "web_query",
